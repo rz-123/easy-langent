@@ -34,19 +34,7 @@ export default defineConfig({
         items: [
           { text: '第六章 LangGraph基础', link: '/guide/chapter6' },
           { text: '第七章 LangGraph进阶', link: '/guide/chapter7' },
-          { text: '第八章 综合实战：谁是卧底', link: '/guide/chapter8' }
-        ]
-      },
-      {
-        text: 'Agent技能扩展',
-        items: [
-          { text: '第九章 Agent Skills与lang框架开发与应用', link: '/guide/chapter9' },
-          { text: '第十章 Agent实战：手搓小龙虾（轻量级）', link: '/guide/chapter10' }
-        ]
-      },
-      {
-        text: '结语',
-        items: [
+          { text: '第八章 综合实战：谁是卧底', link: '/guide/chapter8' },
           { text: '结语', link: '/guide/结语' }
         ]
       }
