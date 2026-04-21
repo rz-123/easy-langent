@@ -1095,7 +1095,11 @@ model_dir = snapshot_download('Qwen/Qwen3-Embedding-0.6B',cache_dir='./models')
 在使用 `HuggingFaceEmbeddings` 初始化词向量模型时，底层会自动调用 `sentence-transformers` 库。因此需要安装依赖包：
 ```bash
 pip install sentence-transformers
+# Requires transformers>=4.51.0
+# Requires sentence-transformers>=2.7.0
 ```
+> Qwen3-Embedding-0.6B模型魔塔社区访问地址：https://www.modelscope.cn/models/Qwen/Qwen3-Embedding-0.6B
+
 实践代码
 
 ```python
