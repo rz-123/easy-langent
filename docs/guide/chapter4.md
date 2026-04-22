@@ -1748,158 +1748,19 @@ for i, question in enumerate(test_questions):
 
 #### 4.6.2.2 自动化评估工具：高效迭代优化
 
-对于大规模迭代（如每日优化后的效果验证），人工评估成本过高，需借助自动化工具快速评估。常用的自动化评估工具分为两类：LangChain原生工具和第三方专用工具（如RAGAS、LLM-as-a-Judge）。
-
-**1. LangChain原生评估工具**
-
-LangChain 1.x提供了检索评估专用的`RetrievalEvaluator`（迁移至`langchain.evaluation.retrieval`子模块）和答案评估专用的`QAEvalChain`，可直接评估检索相关性和答案准确性，无需额外开发。
-
-```python
-# 1. 评估检索相关性（精确率、召回率、F1分数）
-from langchain.evaluation.retrieval import RetrievalEvaluator  # 1.x 正确导入路径
-from langchain_community.vectorstores import FAISS  # 替换：导入FAISS（原Chroma）
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("未找到OPENAI_API_KEY环境变量")
-
-# 初始化Qwen3本地嵌入模型
-embedding_model_path = "./models/Qwen/Qwen3-Embedding-0___6B"
-# 验证模型路径有效性
-if not os.path.exists(embedding_model_path):
-    raise FileNotFoundError(f"Qwen3嵌入模型路径不存在：{embedding_model_path}")
-
-embeddings = HuggingFaceEmbeddings(
-    model_name=embedding_model_path,
-    model_kwargs={
-        "device": "cpu",  # 强制CPU运行，无需GPU
-        "trust_remote_code": True,  # Qwen3模型必选配置，信任远程代码
-        # 如需加载量化模型，可启用以下配置（降低内存占用）
-        # "load_in_8bit": True,
-    },
-    encode_kwargs={
-        "normalize_embeddings": True  # 归一化向量，提升检索相似度计算精度
-    }
-)
-
-# 初始化向量数据库和检索器（替换：Chroma→FAISS，适配FAISS本地加载方式）
-faiss_db_path = "./faiss_db"  # FAISS数据库存储路径
-if not os.path.exists(faiss_db_path):
-    raise FileNotFoundError(f"FAISS向量数据库路径不存在：{faiss_db_path}")
-
-vector_db = FAISS.load_local(
-    folder_path=faiss_db_path,
-    embeddings=embeddings,
-    allow_dangerous_deserialization=True  # 本地开发允许加载，生产环境需谨慎
-)
-retriever = vector_db.as_retriever(search_kwargs={"k": 3})
-
-# 辅助函数：FAISS通过document_id获取标注文档（FAISS无直接get方法，需自定义）
-def get_doc_by_id(vector_db, doc_id):
-    for doc in vector_db.docstore._dict.values():
-        if doc.metadata.get("document_id") == doc_id:
-            return doc
-    raise ValueError(f"未找到document_id为{doc_id}的文档")
-
-# 定义测试集（关键修正：relevant_documents需为人工标注的正确文档，而非动态检索）
-# 注意：需提前为FAISS中的文档添加document_id元数据，确保评估真实性
-test_cases = [
-    {
-        "query": "RAG系统的核心价值是什么？",
-        # 示例：人工从FAISS向量库中筛选的2篇正确相关文档（真实场景需手动标注）
-        "relevant_documents": [
-            get_doc_by_id(vector_db, "doc1"),  # 通过自定义函数获取标注文档
-            get_doc_by_id(vector_db, "doc2")
-        ]
-    },
-    {
-        "query": "LangChain的SequentialChain有什么用？",
-        "relevant_documents": [
-            get_doc_by_id(vector_db, "doc3")
-        ]
-    }
-]
-
-# 初始化检索评估器（1.x 用法不变，指标支持完整）
-retrieval_evaluator = RetrievalEvaluator(
-    metric_names=["precision", "recall", "f1"],  # 要评估的指标
-    retriever=retriever
-)
-
-# 执行评估
-results = retrieval_evaluator.evaluate_batch(
-    [case["query"] for case in test_cases],
-    [case["relevant_documents"] for case in test_cases]
-)
-
-# 打印结果
-for i, result in enumerate(results):
-    print(f"\n测试用例{i+1}（问题：{test_cases[i]['query']}）")
-    print(f"精确率：{round(result['precision'], 4)}")
-    print(f"召回率：{round(result['recall'], 4)}")
-    print(f"F1分数：{round(result['f1'], 4)}")
-
-# 2. 评估答案准确性（事实一致性、完整性）
-from langchain.evaluation import QAEvalChain
-from langchain_openai import ChatOpenAI  # 1.x 推荐用ChatOpenAI（替代旧版OpenAI）
-
-# 初始化大模型（1.x 推荐配置：添加超时、重试，提升稳定性）
-llm = ChatOpenAI(
-    api_key=api_key,
-    temperature=0,  # 0温度保证评估标准统一
-    timeout=30,
-    max_retries=2
-)
-eval_chain = QAEvalChain.from_llm(llm=llm)
-
-# 定义测试集（问题-正确答案-系统答案）
-test_data = [
-    {
-        "question": "RAG系统的核心价值是什么？",
-        "answer": "RAG系统的核心价值包括提升准确性、拓展知识边界、降低微调成本。提升准确性指答案基于真实参考资料，减少事实错误；拓展知识边界指大模型可获取训练数据外的最新信息和私有信息；降低成本指更新知识无需微调大模型，仅需更新知识库。",
-        "prediction": "RAG的核心价值是提升答案准确性、拓展知识范围、降低企业使用大模型的成本。准确性方面，依托外部知识库保障事实正确；知识范围可覆盖最新行业数据和内部文档；成本上避免了昂贵的大模型微调。"
-    },
-    {
-        "question": "SequentialChain的作用是什么？",
-        "answer": "SequentialChain用于串联多个LLMChain，支持多输入多输出，可指定整个流程的输入变量和输出变量，能结合多个维度的信息完成复杂的多步骤任务。",
-        "prediction": "SequentialChain可以把多个链按顺序连接起来，支持多个输入和输出，适合处理需要多步骤的任务，比如先提取产品卖点再写营销话术。"
-    }
-]
-
-# 执行评估
-eval_results = eval_chain.evaluate(
-    test_data,
-    prediction_key="prediction",  # 系统答案的键名
-    question_key="question",      # 问题的键名
-    answer_key="answer"           # 正确答案的键名
-)
-
-# 打印评估结果
-for i, result in enumerate(eval_results):
-    print(f"\n测试用例{i+1}评估结果：")
-    print(f"事实一致性评分（1-5分）：{result['correctness']}")
-    print(f"评估说明：{result['reasoning']}")
-```
-
-**2. 第三方专用工具：RAGAS（RAG专用评估框架）**
-
 RAGAS是专门针对RAG系统的评估框架，支持评估相关性、准确性、完整性等核心指标，且无需标注正确答案（仅需问题、检索片段、系统答案），使用更便捷
 
 ```python
 # 安装依赖：pip install ragas datasets faiss-cpu  # 补充：安装FAISS依赖
 from ragas import evaluate
-from ragas.metrics import (
-    RetrievalPrecision,  # 检索精确率
-    RetrievalRecall,     # 检索召回率
-    Faithfulness,        # 事实一致性
-    AnswerCompleteness   # 答案完整性
+from ragas.metrics.collections import (
+    ContextPrecision,     # 检索精确率
+    ContextRecall,        # 检索召回率
+    Faithfulness,         # 事实一致性
+    AnswerRelevancy       # 答案相关性
 )
 from datasets import Dataset
-from langchain_community.vectorstores import FAISS  # 替换：导入FAISS（原Chroma）
+from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -1913,27 +1774,23 @@ api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     raise ValueError("未找到OPENAI_API_KEY环境变量")
 
-# 1. 初始化RAG系统组件（1.x 官方推荐LCEL链式写法，替代旧版RetrievalQA）
-# 初始化Qwen3本地嵌入模型
+# 1. 初始化RAG系统组件
 embedding_model_path = "./models/Qwen/Qwen3-Embedding-0___6B"
-# 验证模型路径有效性
 if not os.path.exists(embedding_model_path):
     raise FileNotFoundError(f"Qwen3嵌入模型路径不存在：{embedding_model_path}")
 
 embeddings = HuggingFaceEmbeddings(
     model_name=embedding_model_path,
     model_kwargs={
-        "device": "cpu",  # 强制CPU运行，无需GPU
-        "trust_remote_code": True,  # Qwen3模型必选配置，信任远程代码
-        # 如需加载量化模型，可启用以下配置（降低内存占用）
-        # "load_in_8bit": True,
+        "device": "cpu",
+        "trust_remote_code": True,
     },
     encode_kwargs={
-        "normalize_embeddings": True  # 归一化向量，提升检索相似度计算精度
+        "normalize_embeddings": True
     }
 )
 
-# 初始化FAISS向量数据库（替换：Chroma→FAISS）
+# 加载FAISS向量库
 faiss_db_path = "./faiss_db"
 if not os.path.exists(faiss_db_path):
     raise FileNotFoundError(f"FAISS向量数据库路径不存在：{faiss_db_path}")
@@ -1941,42 +1798,40 @@ if not os.path.exists(faiss_db_path):
 vector_db = FAISS.load_local(
     folder_path=faiss_db_path,
     embeddings=embeddings,
-    allow_dangerous_deserialization=True  # 本地开发允许加载，生产环境需谨慎
+    allow_dangerous_deserialization=True
 )
 retriever = vector_db.as_retriever(search_kwargs={"k": 3})
 
-# 定义提示词模板
+# 定义提示词
 system_prompt = "基于以下上下文回答问题：{context}"
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
     ("human", "{question}")
 ])
 
-# 定义文档格式化函数
+# 文档格式化函数
 def format_docs(docs):
     return "\n\n".join([doc.page_content for doc in docs])
 
-# 构建LCEL风格的RAG链
+# 修复LCEL链语法（管道符连接）
 rag_qa_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()},
-    prompt,
-    ChatOpenAI(api_key=api_key, temperature=0.3),
-    StrOutputParser()
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | ChatOpenAI(api_key=api_key, temperature=0.3)
+    | StrOutputParser()
 )
 
-# 2. 构建测试数据集（仅需问题）
+# 2. 构建测试数据集
 test_questions = [
     "RAG系统的核心价值是什么？",
     "SequentialChain的作用是什么？",
     "RAG系统的构建流程有哪些步骤？"
 ]
 
-# 3. 采集系统输出（检索片段、生成答案）
+# 3. 采集RAG输出结果
 test_data = []
 for question in test_questions:
-    # 获取生成答案（1.x 统一用invoke方法执行链）
     answer = rag_qa_chain.invoke(question)
-    # 获取检索片段（1.x 用invoke替代get_relevant_documents，FAISS完全兼容）
     retrieved_docs = retriever.invoke(question)
     contexts = [doc.page_content for doc in retrieved_docs]
     
@@ -1986,32 +1841,22 @@ for question in test_questions:
         "contexts": contexts
     })
 
-# 4. 转换为RAGAS支持的Dataset格式
+# 4. 转换为RAGAS标准格式
 dataset = Dataset.from_list(test_data)
 
-# 5. 定义要评估的指标
-metrics = [RetrievalPrecision(), RetrievalRecall(), Faithfulness(), AnswerCompleteness()]
+# 5. 评估指标
+metrics = [ContextPrecision(), ContextRecall(), Faithfulness(), AnswerRelevancy()]
 
-# 6. 执行评估（关键修正：最新版RAGAS通过llm参数指定大模型，无需直接传api_key）
+# 6. 执行评估
 results = evaluate(
     dataset=dataset,
     metrics=metrics,
-    llm=ChatOpenAI(api_key=api_key, temperature=0)  # 传入LangChain LLM实例
+    llm=ChatOpenAI(api_key=api_key, temperature=0)
 )
 
-# 7. 打印评估结果（转换为DataFrame更易读）
+# 7. 输出结果
 print("RAG系统自动化评估结果：")
-print(results.to_pandas())
-```
-
-运行结果示例：
-
-```text
-RAG系统自动化评估结果：
-   question  retrieval_precision  retrieval_recall  faithfulness  answer_completeness
-0  RAG系统的核心价值是什么？               0.85              0.82         0.96                  0.88
-1  SequentialChain的作用是什么？               0.90              0.88         0.98                  0.92
-2  RAG系统的构建流程有哪些步骤？               0.82              0.79         0.95                  0.85
+print(results)
 ```
 
 >  踩坑指南：自动化评估工具的结果需人工校准。比如RAGAS的事实一致性评分可能存在偏差，对于核心场景的评估结果，建议抽取10%-20%的样本进行人工复核，确保评估准确性。
